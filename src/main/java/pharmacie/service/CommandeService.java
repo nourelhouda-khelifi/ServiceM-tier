@@ -17,6 +17,7 @@ import pharmacie.dao.LigneRepository;
 import pharmacie.dao.MedicamentRepository;
 import pharmacie.entity.Commande;
 import pharmacie.entity.Ligne;
+import pharmacie.entity.Medicament;
 
 @Slf4j
 @Service
@@ -100,8 +101,45 @@ public class CommandeService {
      */
     @Transactional
     public Ligne ajouterLigne(int commandeNum, int medicamentRef, @Positive int quantite) {
-        // TODO : implémenter la méthode
-        throw new UnsupportedOperationException("Not implemented yet");
+        Commande commande = commandeDao.findById(commandeNum).orElseThrow();
+
+        if (commande.getEnvoyeele() != null) {
+            throw new IllegalStateException("La commande a déjà été envoyée");
+        }
+
+        Medicament medicament = medicamentDao.findById(medicamentRef).orElseThrow();
+
+        if (medicament.isIndisponible()) {
+            throw new IllegalStateException("Le médicament est indisponible");
+        }
+
+        int nouvellesUnites =medicament.getUnitesCommandees() + quantite;
+        if (nouvellesUnites > medicament.getUnitesEnStock()) {
+            throw new IllegalStateException("Pas assez de stock pour le médicament");
+        }
+
+        var ligneExistante = commande.getLignes().stream()
+        .filter(l -> l.getMedicament().getReference().equals(medicamentRef))
+        .findFirst();
+    
+        Ligne ligne;
+
+        if (ligneExistante.isPresent()) {
+            // Le médicament est déjà dans la commande → additionner les quantités
+            ligne = ligneExistante.get();
+            ligne.setQuantite(ligne.getQuantite() + quantite);
+        } else {
+            // Créer une nouvelle ligne
+            ligne = new Ligne(commande, medicament, quantite);
+            commande.getLignes().add(ligne);
+        }
+    
+    
+    medicament.setUnitesCommandees(nouvellesUnites);
+    
+    ligneDao.save(ligne);
+    medicamentDao.save(medicament);
+    return ligne;
     }
 
     /**
@@ -118,8 +156,23 @@ public class CommandeService {
      */
     @Transactional
     public void supprimerLigne(int id) {
-        // TODO : implémenter la méthode
-        throw new UnsupportedOperationException("Not implemented yet");
+        var ligne = ligneDao.findById(id).orElseThrow();
+
+        if (ligne.getCommande().getEnvoyeele() != null) {
+            throw new IllegalStateException("La commande a déjà été envoyée");
+        }
+        Medicament medicament = ligne.getMedicament();
+        int nouvellesUnites = medicament.getUnitesCommandees() - ligne.getQuantite();
+        
+        // Vérifier que les unitésCommandées ne deviendraient pas négatives
+        if (nouvellesUnites < 0) {
+            throw new IllegalStateException("Les unitésCommandées ne peuvent pas être négatives");
+        }
+        
+        medicament.setUnitesCommandees(nouvellesUnites);
+
+        ligneDao.deleteById(id);
+        medicamentDao.save(medicament);
     }
 
     /**
@@ -139,8 +192,32 @@ public class CommandeService {
      */
     @Transactional
     public Commande enregistreExpedition(int commandeNum) {
-        // TODO : implémenter la méthode
-        throw new UnsupportedOperationException("Not implemented yet");
+        Commande commande = commandeDao.findById(commandeNum).orElseThrow();
+
+        if (commande.getEnvoyeele() != null) {
+            throw new IllegalStateException("La commande a déjà été envoyée");
+        }
+        commande.setEnvoyeele(LocalDate.now());
+        for (Ligne ligne : commande.getLignes()) {
+            Medicament medicament = ligne.getMedicament();
+            int quantite = ligne.getQuantite();
+            int nouvellesUnitesEnStock = medicament.getUnitesEnStock() - quantite;
+            int nouvellesUnitesCommandees = medicament.getUnitesCommandees() - quantite;
+            
+            // Vérifier que les stocks ne deviendraient pas négatifs
+            if (nouvellesUnitesEnStock < 0) {
+                throw new IllegalStateException("Les unitésEnStock ne peuvent pas être négatives");
+            }
+            if (nouvellesUnitesCommandees < 0) {
+                throw new IllegalStateException("Les unitésCommandées ne peuvent pas être négatives");
+            }
+            
+            medicament.setUnitesEnStock(nouvellesUnitesEnStock);
+            medicament.setUnitesCommandees(nouvellesUnitesCommandees);
+            medicamentDao.save(medicament);
+        }
+        commandeDao.save(commande);
+        return commande;
     }
 
     /**
